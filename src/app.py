@@ -1,7 +1,9 @@
+import os
 import time
 import logging
 from fastapi import FastAPI, File, UploadFile, HTTPException
 import torch
+import torchvision.models as models
 import torchvision.transforms as transforms
 from PIL import Image
 import io
@@ -11,12 +13,24 @@ logger = logging.getLogger("mlops_api")
 
 app = FastAPI(title="Cats vs Dogs Classification API")
 
-MODEL_PATH = "models/best_model.pth"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_PATH = os.path.join(BASE_DIR, "models", "best_model.pth")
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 try:
-    model = torch.load(MODEL_PATH, map_location=device)
+    # 1. Instantiate MobileNetV2 architecture with 2 output classes
+    model = models.mobilenet_v2(weights=None)
+    model.classifier[1] = torch.nn.Linear(model.last_channel, 2)
+    
+    # 2. Load the state dictionary (weights)
+    state_dict = torch.load(MODEL_PATH, map_location=device)
+    model.load_state_dict(state_dict)
+    
+    # 3. Set to evaluation mode
+    model.to(device)
     model.eval()
+    logger.info("Model loaded successfully!")
 except Exception as e:
     logger.error(f"Failed to load model: {e}")
     model = None
