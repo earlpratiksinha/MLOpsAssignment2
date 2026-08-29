@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  ml_api:
+    build: .
+    image: cat-dog-classifier:latest
+    container_name: cat_dog_ml_service
+    ports:
+      - "8000:8000"
+    restart: always

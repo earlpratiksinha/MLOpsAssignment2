@@ -1,62 +1,63 @@
-import io
+import time
+import logging
+from fastapi import FastAPI, File, UploadFile, HTTPException
 import torch
-import torch.nn as nn
-from torchvision import transforms, models
+import torchvision.transforms as transforms
 from PIL import Image
-from fastapi import FastAPI, UploadFile, File, HTTPException
+import io
 
-app = FastAPI(title="Cat vs Dog Image Classifier API")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("mlops_api")
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
-
-model = models.mobilenet_v2(weights=None)
-model.classifier[1] = nn.Linear(model.last_channel, 2)
+app = FastAPI(title="Cats vs Dogs Classification API")
 
 MODEL_PATH = "models/best_model.pth"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-@app.on_event("startup")
-def load_model():
-    try:
-        model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
-        model.to(DEVICE)
-        model.eval()
-        print(f"Model successfully loaded from {MODEL_PATH}")
-    except Exception as e:
-        print(f"Error loading model: {e}")
+try:
+    model = torch.load(MODEL_PATH, map_location=device)
+    model.eval()
+except Exception as e:
+    logger.error(f"Failed to load model: {e}")
+    model = None
 
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-CLASSES = ["Cat", "Dog"]
-
-@app.get("/")
-def home():
-    return {"message": "Cat vs Dog Classifier API is running!"}
+@app.get("/health")
+def health_check():
+    if model is None:
+        raise HTTPException(status_code=500, detail="Model is not loaded")
+    return {"status": "healthy", "model_loaded": True}
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    if not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Uploaded file must be an image.")
-
-    image_bytes = await file.read()
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    start_time = time.time()
+    if model is None:
+        raise HTTPException(status_code=500, detail="Model unavailable")
     
-    input_tensor = transform(image).unsqueeze(0).to(DEVICE)
-
+    contents = await file.read()
+    image = Image.open(io.BytesIO(contents)).convert("RGB")
+    tensor = transform(image).unsqueeze(0).to(device)
+    
     with torch.no_grad():
-        outputs = model(input_tensor)
-        probabilities = torch.softmax(outputs, dim=1)[0]
-        confidence, predicted_idx = torch.max(probabilities, 0)
-
+        outputs = model(tensor)
+        probabilities = torch.nn.functional.softmax(outputs, dim=1)[0]
+        cat_prob = float(probabilities[0])
+        dog_prob = float(probabilities[1])
+        
+    pred_label = "Cat" if cat_prob > dog_prob else "Dog"
+    latency_ms = round((time.time() - start_time) * 1000, 2)
+    
+    logger.info(f"File: {file.filename} | Prediction: {pred_label} | Latency: {latency_ms}ms")
+    
     return {
         "filename": file.filename,
-        "prediction": CLASSES[predicted_idx.item()],
-        "confidence": float(confidence.item()),
-        "probabilities": {
-            "Cat": float(probabilities[0].item()),
-            "Dog": float(probabilities[1].item())
-        }
+        "prediction": pred_label,
+        "confidence": max(cat_prob, dog_prob),
+        "probabilities": {"Cat": cat_prob, "Dog": dog_prob},
+        "latency_ms": latency_ms
     }
