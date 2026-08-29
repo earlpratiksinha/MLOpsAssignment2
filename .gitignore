@@ -1,0 +1,17 @@
+# Python & Environment
+__pycache__/
+*.pyc
+venv/
+.env
+
+# Data & Models (tracked via DVC/local storage)
+data/
+models/
+*.pth
+*.zip
+
+# System & OS
+.DS_Store
+.vscode/
+.idea/
+mlruns/
